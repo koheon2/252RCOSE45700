@@ -1,3 +1,4 @@
+# haegin_project
 # Haegin Multiplayer Dedicated Server
 
 This folder contains a lightweight Node.js websocket/HTTP server meant to run as a Unity Game Server Hosting (GSH) dedicated instance. It exposes a `/health` endpoint for readiness probes and a websocket interface for turn/command relays between two players.
