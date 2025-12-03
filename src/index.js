@@ -545,7 +545,7 @@ function processUseCard(session, clientId, command) {
   const playerState = session.state.players[clientId];
   if (!playerState) return false;
 
-  const { cardId, targetQ, targetR, effectValue } = command.payload || {};
+  const { cardId, targetQ, targetR, effectValue, isAoE } = command.payload || {};
   if (!cardId) {
     sendTo(clientId, { type: 'error', message: 'Missing cardId' });
     return false;
@@ -568,20 +568,58 @@ function processUseCard(session, clientId, command) {
     return false;
   }
 
-  // Find target player by position
+  // Handle AoE cards - apply damage to all enemies in adjacent tiles
+  if (isAoE && cardData.type === 'damage') {
+    const centerPos = { q: targetQ, r: targetR };
+    const neighbors = getHexNeighbors(centerPos);
+    let hitAny = false;
+
+    for (const neighborPos of neighbors) {
+      for (const [playerId, pos] of Object.entries(session.state.positions)) {
+        if (playerId === clientId) continue; // Don't damage self
+        if (pos && pos.q === neighborPos.q && pos.r === neighborPos.r) {
+          const targetState = session.state.players[playerId];
+          if (targetState) {
+            targetState.hp = Math.max(0, targetState.hp - cardData.amount);
+            hitAny = true;
+            if (targetState.hp <= 0) {
+              declareWinner(session, clientId, `${cardData.id}-kill`);
+            }
+          }
+        }
+      }
+    }
+
+    playerState.steps -= cardData.cost;
+    playerState.hand.splice(cardIndex, 1);
+    playerState.discard.push(cardId);
+    return true;
+  }
+
+  // Find target player by position (for non-AoE cards)
   let targetId = null;
-  if (targetQ !== undefined && targetR !== undefined) {
+  const hasExplicitTarget = targetQ !== undefined && targetR !== undefined;
+
+  if (hasExplicitTarget) {
     const targetPos = { q: targetQ, r: targetR };
     for (const [playerId, pos] of Object.entries(session.state.positions)) {
+      // Skip self for damage cards
+      if (playerId === clientId && cardData.type === 'damage') continue;
       if (pos && pos.q === targetPos.q && pos.r === targetPos.r) {
         targetId = playerId;
         break;
       }
     }
+
+    // If explicit target position was given but no valid target found, fail for damage cards
+    if (!targetId && cardData.type === 'damage') {
+      sendTo(clientId, { type: 'error', message: 'No valid target at position' });
+      return false;
+    }
   }
 
-  // If no target found by position, use card target logic
-  if (!targetId) {
+  // Only use fallback target logic if no explicit target position was provided
+  if (!targetId && !hasExplicitTarget) {
     targetId = getTargetByCard(session, clientId, cardData);
   }
 
@@ -851,8 +889,8 @@ function getDefaultCardCollection() {
   return [
     { id: 'Slash', copies: 6 },
     { id: 'Arrow', copies: 6 },
-    { id: 'Heal', copies: 4 },
-    { id: 'Fireball', copies: 4 }
+    { id: 'Heal', copies: 6 },
+    { id: 'Fireball', copies: 6 }
   ];
 }
 
@@ -1037,6 +1075,21 @@ function hexDistance(a, b) {
   const dr = (b.r ?? 0) - (a.r ?? 0);
   const ds = -dq - dr;
   return (Math.abs(dq) + Math.abs(dr) + Math.abs(ds)) / 2;
+}
+
+function getHexNeighbors(center) {
+  const directions = [
+    { q: 1, r: 0 },
+    { q: 1, r: -1 },
+    { q: 0, r: -1 },
+    { q: -1, r: 0 },
+    { q: -1, r: 1 },
+    { q: 0, r: 1 }
+  ];
+  return directions.map(dir => ({
+    q: (center.q ?? 0) + dir.q,
+    r: (center.r ?? 0) + dir.r
+  }));
 }
 
 function isWithinBoard(target, radius) {
